@@ -1,0 +1,27 @@
+# Check this repository's own workflow files.
+name: Lint workflows
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  actionlint:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out repository code
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Run actionlint
+        run: |
+          curl -sSL -o actionlint.tgz \
+            https://github.com/rhysd/actionlint/releases/download/v1.7.7/actionlint_1.7.7_linux_amd64.tar.gz
+          tar xzf actionlint.tgz actionlint
+          ./actionlint -color

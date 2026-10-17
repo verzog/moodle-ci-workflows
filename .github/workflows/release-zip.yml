@@ -1,0 +1,75 @@
+# Reusable "Release zip": when a release is published, check the tag matches $plugin->release in version.php,
+# build <component>-<tag>.zip with the plugin's directory name as its top folder, and attach it to the release.
+#
+# Call it from a plugin repository's .github/workflows/release.yml:
+#
+#   on:
+#     release:
+#       types: [published]
+#   permissions:
+#     contents: write
+#   jobs:
+#     release:
+#       uses: verzog/moodle-ci-workflows/.github/workflows/release-zip.yml@v1
+#
+# The component and directory name are read from $plugin->component in version.php
+# (local_myplugin -> myplugin/). Files marked export-ignore in .gitattributes are left out of the zip.
+name: Release zip
+
+on:
+  workflow_call:
+    inputs:
+      plugin-dir:
+        description: Top folder name in the zip. Empty uses the part of $plugin->component after the first underscore.
+        type: string
+        default: ''
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    env:
+      TAG: ${{ github.event.release.tag_name }}
+      GH_TOKEN: ${{ github.token }}
+      PLUGINDIR_INPUT: ${{ inputs.plugin-dir }}
+
+    steps:
+      - name: Check this was started by a published release
+        run: |
+          if [ -z "$TAG" ]; then
+            echo "::error::No release tag: call this workflow from 'on: release: types: [published]'."
+            exit 1
+          fi
+
+      - name: Check out the release tag
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.release.tag_name }}
+
+      - name: Read version.php
+        run: |
+          COMPONENT=$(sed -nE "s/^\\\$plugin->component\s*=\s*'([a-z0-9_]+)'.*/\1/p" version.php)
+          RELEASE=$(sed -nE "s/^\\\$plugin->release\s*=\s*'([^']+)'.*/\1/p" version.php)
+          if [ -z "$COMPONENT" ]; then
+            echo "::error::Could not read \$plugin->component from version.php."
+            exit 1
+          fi
+          PLUGINDIR=${PLUGINDIR_INPUT:-${COMPONENT#*_}}
+          echo "Component: $COMPONENT, folder: $PLUGINDIR/, tag: $TAG, version.php release: $RELEASE"
+          if [ "$TAG" != "$RELEASE" ]; then
+            echo "::error::Release tag '$TAG' does not match \$plugin->release '$RELEASE' in version.php."
+            exit 1
+          fi
+          {
+            echo "COMPONENT=$COMPONENT"
+            echo "PLUGINDIR=$PLUGINDIR"
+          } >> "$GITHUB_ENV"
+
+      - name: Build the plugin zip
+        run: git archive --format=zip --prefix="$PLUGINDIR/" -o "$COMPONENT-$TAG.zip" "$TAG"
+
+      - name: Attach the zip to the release
+        run: gh release upload "$TAG" "$COMPONENT-$TAG.zip" --clobber
