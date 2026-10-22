@@ -101,23 +101,23 @@ repository; the workflow picks it up from there.
 
 ## Versions
 
-Plugins call `@v1`. The `v1` tag moves to the newest compatible change, so fixes reach every plugin on its next
-run. A change that needs plugins to change their caller (for example, a removed input) gets a new major tag (`v2`),
-and plugins move to it one at a time. Each change is also tagged with its own version (`v1.0.0`, `v1.1.0`) to pin
-to when testing.
+Plugins call `@v1`, which is a **branch**. It only ever moves forward to the newest compatible change on `main`, so
+fixes reach every plugin on its next run. A change that needs plugins to change their caller (for example, a
+removed input) goes on a new branch, `v2`, and plugins move to it one at a time.
 
 To change a workflow:
 
 1. Open a pull request here. The "Lint workflows" check runs actionlint and shellcheck over the files.
-2. Test the change from one plugin by pointing its caller at the branch (`@my-branch`), and check that plugin's CI.
-3. Merge, then tag the release and move `v1`:
+2. Test the change from one plugin by pointing its caller at the pull request's branch (`@my-branch`), and check
+   that plugin's CI.
+3. Merge, then move `v1` up to `main`. This is a fast-forward, never a force-push:
 
    ```sh
-   git tag v1.1.0
-   git tag -f v1
-   git push origin v1.1.0
-   git push -f origin v1
+   git fetch origin
+   git push origin origin/main:refs/heads/v1
    ```
+
+To pin a plugin to one exact version while testing, use the commit SHA instead of `@v1`.
 
 ## Licence
 
