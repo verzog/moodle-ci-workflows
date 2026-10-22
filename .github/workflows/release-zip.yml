@@ -1,5 +1,7 @@
 # Reusable "Release zip": when a release is published, check the tag matches $plugin->release in version.php,
 # build <component>-<tag>.zip with the plugin's directory name as its top folder, and attach it to the release.
+# The tag may carry a "v" prefix ($plugin->release '1.2.0' matches tag 1.2.0 or v1.2.0), and anything after the
+# first space in $plugin->release is ignored ('1.2.0 (Build 2026101600)' matches v1.2.0).
 #
 # Call it from a plugin repository's .github/workflows/release.yml:
 #
@@ -23,6 +25,12 @@ on:
         description: Top folder name in the zip. Empty uses the part of $plugin->component after the first underscore.
         type: string
         default: ''
+      tag:
+        description: >-
+          Release tag to build. Empty uses the published release's tag; set it from a workflow_dispatch input to
+          rebuild the zip for an existing release.
+        type: string
+        default: ''
 
 permissions:
   contents: write
@@ -31,7 +39,7 @@ jobs:
   build:
     runs-on: ubuntu-24.04
     env:
-      TAG: ${{ github.event.release.tag_name }}
+      TAG: ${{ inputs.tag || github.event.release.tag_name }}
       GH_TOKEN: ${{ github.token }}
       PLUGINDIR_INPUT: ${{ inputs.plugin-dir }}
 
@@ -39,7 +47,7 @@ jobs:
       - name: Check this was started by a published release
         run: |
           if [ -z "$TAG" ]; then
-            echo "::error::No release tag: call this workflow from 'on: release: types: [published]'."
+            echo "::error::No release tag: call this from 'on: release: types: [published]' or pass the tag input."
             exit 1
           fi
 
@@ -47,7 +55,7 @@ jobs:
         uses: actions/checkout@v6
         with:
           persist-credentials: false
-          ref: ${{ github.event.release.tag_name }}
+          ref: ${{ inputs.tag || github.event.release.tag_name }}
 
       - name: Read version.php
         run: |
@@ -59,7 +67,8 @@ jobs:
           fi
           PLUGINDIR=${PLUGINDIR_INPUT:-${COMPONENT#*_}}
           echo "Component: $COMPONENT, folder: $PLUGINDIR/, tag: $TAG, version.php release: $RELEASE"
-          if [ "$TAG" != "$RELEASE" ]; then
+          VERSION=${RELEASE%% *}
+          if [ "$TAG" != "$VERSION" ] && [ "$TAG" != "v$VERSION" ]; then
             echo "::error::Release tag '$TAG' does not match \$plugin->release '$RELEASE' in version.php."
             exit 1
           fi
