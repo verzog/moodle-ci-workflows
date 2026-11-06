@@ -145,9 +145,21 @@ jobs:
           ini-values: max_input_vars=5000, opcache.enable_cli=1, opcache.jit=disable
           coverage: none
 
+      # Packagist and GitHub downloads occasionally fail on the runners, so try up to three times.
       - name: Initialise moodle-plugin-ci
         run: |
-          composer create-project -n --no-dev --prefer-dist moodlehq/moodle-plugin-ci ci ^4
+          for attempt in 1 2 3; do
+            if composer create-project -n --no-dev --prefer-dist moodlehq/moodle-plugin-ci ci ^4; then
+              break
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              echo "::error::Could not download moodle-plugin-ci after 3 attempts."
+              exit 1
+            fi
+            echo "::warning::Downloading moodle-plugin-ci failed (attempt $attempt of 3); retrying in $((attempt * 30)) seconds."
+            rm -rf ci
+            sleep $((attempt * 30))
+          done
           echo "$(cd ci/bin; pwd)" >> "$GITHUB_PATH"
           echo "$(cd ci/vendor/bin; pwd)" >> "$GITHUB_PATH"
           sudo locale-gen en_AU.UTF-8
@@ -177,26 +189,51 @@ jobs:
           EXTRA_PLUGINS: ${{ inputs.extra-plugins }}
           TOKEN: ${{ secrets.extra-plugins-token || github.token }}
 
+      # The install downloads Moodle, Composer and npm packages and Node.js, any of which can fail for reasons that
+      # have nothing to do with the plugin, so it's tried up to three times. A failed attempt leaves a Moodle checkout,
+      # its data directory and its database behind, and the next attempt would stop on them, so they're removed
+      # first. The plugin itself is copied into Moodle, not moved, so ./plugin is untouched.
       - name: Install moodle-plugin-ci
-        run: moodle-plugin-ci install --plugin ./plugin --db-host=127.0.0.1
+        id: install
+        run: |
+          for attempt in 1 2 3; do
+            if moodle-plugin-ci install --plugin ./plugin --db-host=127.0.0.1; then
+              exit 0
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              echo "::error::The install failed 3 times. Its log above shows why; the later checks were skipped."
+              exit 1
+            fi
+            echo "::warning::The install failed (attempt $attempt of 3); retrying in $((attempt * 30)) seconds."
+            rm -rf moodle moodledata
+            if [ "$DB" = pgsql ]; then
+              psql -h 127.0.0.1 -U postgres -c 'DROP DATABASE IF EXISTS moodle;' || true
+            else
+              mysql -h 127.0.0.1 -u root -e 'DROP DATABASE IF EXISTS moodle;' || true
+            fi
+            sleep $((attempt * 30))
+          done
         env:
           DB: ${{ matrix.database }}
           MOODLE_BRANCH: ${{ matrix.moodle-branch }}
 
+      # Every check below needs a working install, so none of them runs if it failed: the install step's own log
+      # is then the only failure, rather than each check also failing with 'Not enough arguments (missing: "plugin")'.
+
       # Lint once, on the lowest supported PHP: the syntax check doesn't vary by Moodle branch or database.
       - name: PHP Lint
-        if: ${{ !cancelled() && matrix.php == inputs.phplint-php }}
+        if: ${{ !cancelled() && steps.install.outcome == 'success' && matrix.php == inputs.phplint-php }}
         run: moodle-plugin-ci phplint
 
       - name: PHP Mess Detector
         continue-on-error: ${{ !inputs.phpmd-blocking }} # Reported only, unless phpmd-blocking is set.
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: moodle-plugin-ci phpmd
 
       # moodle-plugin-ci always uses the plain "moodle" standard, so pass the plugin's own ruleset when it has one
       # (e.g. a proprietary plugin excluding the GPL boilerplate sniff).
       - name: Moodle Code Checker
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: |
           if [ -f plugin/.phpcs.xml ]; then
             moodle-plugin-ci phpcs --max-warnings 0 --standard="$GITHUB_WORKSPACE/plugin/.phpcs.xml"
@@ -205,33 +242,33 @@ jobs:
           fi
 
       - name: Moodle PHPDoc Checker
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: moodle-plugin-ci phpdoc --max-warnings 0
 
       - name: Validating
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: moodle-plugin-ci validate
 
       - name: Check upgrade savepoints
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: moodle-plugin-ci savepoints
 
       - name: Mustache Lint
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: moodle-plugin-ci mustache
 
       # Grunt only runs on the branch AMD builds are made on; other branches can minify differently.
       - name: Grunt
-        if: ${{ !cancelled() && matrix.moodle-branch == inputs.grunt-branch }}
+        if: ${{ !cancelled() && steps.install.outcome == 'success' && matrix.moodle-branch == inputs.grunt-branch }}
         run: moodle-plugin-ci grunt --max-lint-warnings 0
 
       - name: PHPUnit tests
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: moodle-plugin-ci phpunit --fail-on-warning
 
       - name: Behat features
         id: behat
-        if: ${{ !cancelled() && inputs.behat }}
+        if: ${{ !cancelled() && steps.install.outcome == 'success' && inputs.behat }}
         run: |
           if [ -n "$BEHAT_TAGS" ]; then
             moodle-plugin-ci behat --profile chrome --scss-deprecations --auto-rerun 3 --tags="$BEHAT_TAGS"
