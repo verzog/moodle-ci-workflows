@@ -114,6 +114,16 @@ Warnings fail the build: the code checker, PHPDoc and Grunt run with zero warnin
 on its own always uses plain `moodle` and ignores the file). That is how a proprietary (Mode A) plugin keeps its
 GPL boilerplate exclusion.
 
+### Download and install retries
+
+Downloading moodle-plugin-ci and `moodle-plugin-ci install` (which fetches Moodle, Composer and npm packages, and
+Node.js) are each tried up to three times, 30 then 60 seconds apart, because those downloads occasionally fail on
+the runners for reasons that have nothing to do with the plugin. Before a retry, the failed attempt's Moodle
+checkout, data directory and database are removed. A retry shows as a warning in the job's annotations.
+
+If the install still fails, none of the checks run, so the job has one failed step, the install, whose log shows
+why. Before, every check also failed with `Not enough arguments (missing: "plugin")`, which hid the real error.
+
 ## Release input
 
 | Input | Default | Use |
