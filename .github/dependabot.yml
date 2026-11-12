@@ -1,0 +1,14 @@
+# Keeps the actions these workflows use up to date. They are pinned to commit SHAs, so a re-pointed tag can't
+# change what runs in every plugin's CI; Dependabot moves the SHA and the version comment together.
+# One grouped pull request a month keeps the noise (and the lint runs) down.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+      timezone: Australia/Sydney
+    groups:
+      actions:
+        patterns:
+          - '*'
