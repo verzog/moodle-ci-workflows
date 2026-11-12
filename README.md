@@ -5,7 +5,7 @@ keeping its own copy, so a CI fix or a new Moodle branch is made once, here.
 
 | Workflow | What it does |
 |---|---|
-| `moodle-plugin-ci.yml` | Runs moodle-plugin-ci 4 (lint, code checker, PHPDoc, validate, savepoints, Mustache, Grunt, PHPUnit, Behat) across Moodle 5.1–5.3 LTS and Moodle `main` |
+| `moodle-plugin-ci.yml` | Runs moodle-plugin-ci 4 (lint, code checker, PHPDoc, validate, savepoints, Mustache, Composer audit, Grunt, PHPUnit, Behat) across Moodle 5.1–5.3 LTS and Moodle `main` |
 | `release-zip.yml` | When a GitHub release is published, checks the tag matches `$plugin->release`, builds `<component>-<tag>.zip` and attaches it |
 
 ## Using them in a plugin
@@ -67,6 +67,8 @@ All are optional. Pass them under `with:`.
 | `extra-plugins` | empty | Plugins this one depends on, one per line as `owner/repo` or `owner/repo@branch`; each is installed alongside it |
 | `apt-packages` | empty | Ubuntu packages to install first, space separated, e.g. `poppler-utils` |
 | `phpmd-blocking` | `false` | Fail the build on PHP Mess Detector findings (by default they are only reported) |
+| `audit-blocking` | `false` | Fail the build on a known vulnerability in moodle-plugin-ci's own packages (by default a warning; see below) |
+| `timeout-minutes` | `90` | Stop a matrix cell that runs longer than this, so a hung test can't use up Actions minutes |
 
 `database` in a matrix cell is `pgsql` (PostgreSQL 17), `mariadb` (MariaDB 11) or `mysqli` (MySQL 8.4). Each cell
 starts only the database it uses.
@@ -114,6 +116,19 @@ Warnings fail the build: the code checker, PHPDoc and Grunt run with zero warnin
 on its own always uses plain `moodle` and ignores the file). That is how a proprietary (Mode A) plugin keeps its
 GPL boilerplate exclusion.
 
+### Composer audit
+
+`composer audit` runs once per build, on the PHP Lint cell, and takes a few seconds. It checks two things against
+the public security advisories database:
+
+- **moodle-plugin-ci's own packages** (the tooling CI downloads). A finding here shows as a warning on the run,
+  not a failure, because it can only be fixed by a new moodle-plugin-ci release, and failing would turn every
+  plugin red for something no plugin can change. Set `audit-blocking: true` to make it fail.
+- **the plugin's `composer.lock`**, when it has one. A finding here always fails the build: update the package
+  and commit the new lock file.
+
+Abandoned packages are listed in the log but never fail the build.
+
 ### Download and install retries
 
 Downloading moodle-plugin-ci and `moodle-plugin-ci install` (which fetches Moodle, Composer and npm packages, and
@@ -123,6 +138,24 @@ checkout, data directory and database are removed. A retry shows as a warning in
 
 If the install still fails, none of the checks run, so the job has one failed step, the install, whose log shows
 why. Before, every check also failed with `Not enough arguments (missing: "plugin")`, which hid the real error.
+
+## Dependabot
+
+This repository has a `.github/dependabot.yml` that opens one grouped pull request a month for the actions the
+workflows use (`actions/checkout`, `shivammathur/setup-php`, `actions/upload-artifact`). They are pinned to commit
+SHAs, so a tag that is moved upstream can't change what runs in every plugin's CI. The actionlint download in
+`lint.yml` is not something Dependabot can see: bump its version and checksum by hand.
+
+In a plugin repository:
+
+- Turn on **Dependabot alerts** and **Dependabot security updates** (Settings → Advanced Security). Alerts cost
+  no Actions minutes.
+- A `dependabot.yml` is only worth adding when the plugin has its own `composer.json` or `package.json`. The
+  `@v1` in the caller is a branch, so there is nothing for Dependabot to update there. Each Dependabot pull
+  request runs the full CI matrix, so on a private repository use a monthly, grouped schedule.
+- Dependabot's pull requests can't read the repository's Actions secrets. If the plugin passes
+  `extra-plugins-token`, add the same secret under Settings → Secrets and variables → Dependabot, or CI fails on
+  those pull requests when cloning the private plugins.
 
 ## Release input
 
@@ -162,6 +195,7 @@ removed input) goes on a new branch, `v2`, and plugins move to it one at a time.
 To change a workflow:
 
 1. Open a pull request here. The "Lint workflows" check runs actionlint and shellcheck over the files.
+   When adding an action, pin it to a commit SHA with the version in a comment, as the existing ones are.
 2. Test the change from one plugin by pointing its caller at the pull request's branch (`@my-branch`), and check
    that plugin's CI.
 3. Merge, then move `v1` up to `main`. This is a fast-forward, never a force-push:

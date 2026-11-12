@@ -61,6 +61,17 @@ on:
         description: Fail the build on PHP Mess Detector findings. By default they are only reported.
         type: boolean
         default: false
+      audit-blocking:
+        description: >-
+          Fail the build when composer audit finds a known vulnerability in moodle-plugin-ci's own packages. By
+          default those are only reported as a warning, because they can only be fixed upstream. A vulnerability
+          in the plugin's own composer.lock always fails the build.
+        type: boolean
+        default: false
+      timeout-minutes:
+        description: Stop a matrix cell that runs longer than this, so a hung test can't use up Actions minutes.
+        type: number
+        default: 90
     secrets:
       extra-plugins-token:
         description: Token that can read the private repositories listed in extra-plugins.
@@ -72,6 +83,7 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-24.04
+    timeout-minutes: ${{ inputs.timeout-minutes }}
     # Moodle main is the next (unreleased) version: report it, but don't block on it.
     continue-on-error: ${{ matrix.moodle-branch == 'main' }}
 
@@ -122,7 +134,7 @@ jobs:
 
     steps:
       - name: Check out repository code
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           path: plugin
           persist-credentials: false
@@ -138,7 +150,7 @@ jobs:
           APT_PACKAGES: ${{ inputs.apt-packages }}
 
       - name: Setup PHP ${{ matrix.php }}
-        uses: shivammathur/setup-php@v2
+        uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962 # 2.40.0
         with:
           php-version: ${{ matrix.php }}
           extensions: sodium
@@ -147,6 +159,7 @@ jobs:
 
       # Packagist and GitHub downloads occasionally fail on the runners, so try up to three times.
       - name: Initialise moodle-plugin-ci
+        id: init
         run: |
           for attempt in 1 2 3; do
             if composer create-project -n --no-dev --prefer-dist moodlehq/moodle-plugin-ci ci ^4; then
@@ -257,6 +270,33 @@ jobs:
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: moodle-plugin-ci mustache
 
+      # Known vulnerabilities in the CI tooling, checked once (on the PHP Lint cell): the result doesn't vary by
+      # Moodle branch or database. It doesn't need the Moodle install, only the moodle-plugin-ci download.
+      - name: Composer audit
+        if: ${{ !cancelled() && steps.init.outcome == 'success' && matrix.php == inputs.phplint-php }}
+        run: |
+          status=0
+          # Abandoned packages are listed but don't fail: moodle-plugin-ci ships one, and it isn't a vulnerability.
+          if ! composer audit --working-dir=ci --abandoned=report; then
+            if [ "$AUDIT_BLOCKING" = true ]; then
+              echo "::error::composer audit found known vulnerabilities in moodle-plugin-ci's packages."
+              status=1
+            else
+              echo "::warning::composer audit found known vulnerabilities in moodle-plugin-ci's packages (see the" \
+                "Composer audit step). They need a moodle-plugin-ci release to fix, so this is only a warning."
+            fi
+          fi
+          # The plugin's own locked packages are the plugin's to fix, so these always fail.
+          if [ -f plugin/composer.lock ]; then
+            if ! composer audit --working-dir=plugin --locked --abandoned=report; then
+              echo "::error::composer audit found known vulnerabilities in the plugin's composer.lock."
+              status=1
+            fi
+          fi
+          exit "$status"
+        env:
+          AUDIT_BLOCKING: ${{ inputs.audit-blocking }}
+
       # Grunt only runs on the branch AMD builds are made on; other branches can minify differently.
       - name: Grunt
         if: ${{ !cancelled() && steps.install.outcome == 'success' && matrix.moodle-branch == inputs.grunt-branch }}
@@ -280,7 +320,7 @@ jobs:
 
       - name: Upload Behat Faildump
         if: ${{ failure() && steps.behat.outcome == 'failure' }}
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: Behat Faildump (${{ matrix.moodle-branch }}, ${{ matrix.php }}, ${{ matrix.database }})
           path: ${{ github.workspace }}/moodledata/behat_dump
